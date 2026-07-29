@@ -1,0 +1,13 @@
+---
+# wine_apps.yml
+apps:
+  - name: "ZenlessZoneZero"
+    id: "1337001"
+    installer: "HoYoPlay_Setup.exe"  
+    installer_args: "/S"
+    wine_runner: "GE-Proton"         
+    installed_exe: "drive_c/Program Files/HoYoPlay/HoYoPlay.exe"
+    persistent_folders:
+      # WINE will now create the user profile as 'ansible-bot'
+      - "drive_c/users/ansible-bot/AppData/LocalLow/miHoYo"
+      - "drive_c/Program Files/HoYoPlay/games"

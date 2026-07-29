@@ -1,0 +1,90 @@
+---
+- name: Octopus Linux - Automated WINE Prefix Manager
+  hosts: localhost
+  connection: local
+  # Privilege escalation completely removed.
+  # Executes as the ansible-bot user natively.
+
+  vars_files:
+    - wine_apps.yml
+
+  vars:
+    box_data_dir: /home/box-data
+    winstallers_dir: /home/box-data/winstallers
+    appdata_dir: /home/box-data/AppData
+    prefixes_dir: /home/box-data/wine-prefixes
+
+  tasks:
+    - name: Ensure base directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ winstallers_dir }}"
+        - "{{ appdata_dir }}"
+        - "{{ prefixes_dir }}"
+
+    - name: Initialize WINE prefixes inside gaming-debian
+      command: >
+        distrobox enter gaming-debian -- 
+        env WINEPREFIX="{{ prefixes_dir }}/{{ item.name }}" 
+        wineboot -u
+      args:
+        creates: "{{ prefixes_dir }}/{{ item.name }}/user.reg"
+      loop: "{{ apps }}"
+
+    ## -- PERSISTENCE LOGIC -- ##
+    - name: Ensure persistent host directories exist in AppData
+      file:
+        path: "{{ appdata_dir }}/{{ item.0.name }}/{{ item.1 | basename }}"
+        state: directory
+        mode: '0755'
+      loop: "{{ apps | subelements('persistent_folders', skip_missing=True) }}"
+
+    - name: Ensure parent directories exist inside WINE prefix for symlinks
+      file:
+        path: "{{ prefixes_dir }}/{{ item.0.name }}/{{ item.1 | dirname }}"
+        state: directory
+      loop: "{{ apps | subelements('persistent_folders', skip_missing=True) }}"
+
+    - name: Remove default directories in WINE prefix before symlinking
+      file:
+        path: "{{ prefixes_dir }}/{{ item.0.name }}/{{ item.1 }}"
+        state: absent
+      loop: "{{ apps | subelements('persistent_folders', skip_missing=True) }}"
+
+    - name: Symlink persistent folders into WINE prefix
+      file:
+        src: "{{ appdata_dir }}/{{ item.0.name }}/{{ item.1 | basename }}"
+        dest: "{{ prefixes_dir }}/{{ item.0.name }}/{{ item.1 }}"
+        state: link
+        force: yes
+      loop: "{{ apps | subelements('persistent_folders', skip_missing=True) }}"
+
+    ## -- RUNNER & INSTALLER LOGIC -- ##
+    - name: Run Windows installers in gaming-debian
+      shell: >
+        distrobox enter gaming-debian -- bash -c '
+        export WINEPREFIX="{{ prefixes_dir }}/{{ item.name }}";
+        
+        # Determine Runner
+        if [[ "{{ item.wine_runner }}" == "vanilla" ]]; then
+          RUNNER="wine"
+        else
+          # Finds the specific GE-Proton version or defaults to latest installed
+          RUNNER="$(ls -1d ~/.steam/root/compatibilitytools.d/{{ item.wine_runner }}* | tail -n 1)/files/bin/wine"
+        fi
+        
+        # Determine Installer Path (Absolute vs Relative to winstallers)
+        if [[ "{{ item.installer }}" == /* ]]; then
+          INSTALLER_PATH="{{ item.installer }}"
+        else
+          INSTALLER_PATH="{{ winstallers_dir }}/{{ item.installer }}"
+        fi
+        
+        # Execute
+        "$RUNNER" "$INSTALLER_PATH" {{ item.installer_args | default("") }}'
+      args:
+        creates: "{{ prefixes_dir }}/{{ item.name }}/{{ item.installed_exe }}"
+      loop: "{{ apps }}"
