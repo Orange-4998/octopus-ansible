@@ -1,141 +1,70 @@
 ---
-- name: Octopus Linux - Desktop Environment & Distrobox Setup
+- name: Octopus Linux - Main Setup
   hosts: localhost
   connection: local
-  # Global privilege escalation removed. 
-  # Distroboxes will now be owned by the user running the playbook (ansible-bot).
-  
+
   vars:
     human_user: human
-    human_home: /home/human
     box_data_dir: /home/box-data
-    data_dir: /data
 
   tasks:
-    ## 1. Directory Structure Setup (Requires Sudo) ##
-    - name: Ensure base directories exist with correct ownership
+    ## 1. Directory Setup (Requires Sudo) ##
+    - name: Ensure shared box-data directory exists with correct group permissions
       become: yes
       file:
-        path: "{{ item.path }}"
-        state: directory
-        owner: "{{ item.owner }}"
-        group: "{{ item.group }}"
-        mode: "{{ item.mode }}"
-      loop:
-        - { path: "{{ box_data_dir }}", owner: "{{ human_user }}", group: "{{ human_user }}", mode: '0777' }
-        - { path: "{{ human_home }}/Documents/Public", owner: "{{ human_user }}", group: "{{ human_user }}", mode: '0755' }
-        - { path: "{{ human_home }}/Photos/Public", owner: "{{ human_user }}", group: "{{ human_user }}", mode: '0755' }
-        - { path: "{{ human_home }}/Applications", owner: "{{ human_user }}", group: "{{ human_user }}", mode: '0755' }
-        - { path: "{{ data_dir }}/Documents", owner: "{{ human_user }}", group: "{{ human_user }}", mode: '0700' }
-        - { path: "{{ data_dir }}/Code", owner: "{{ human_user }}", group: "{{ human_user }}", mode: '0700' }
-        - { path: "{{ data_dir }}/Photos", owner: "{{ human_user }}", group: "{{ human_user }}", mode: '0700' }
-
-    - name: Ensure box-data subdirectories exist
-      become: yes
-      file:
-        path: "{{ box_data_dir }}/{{ item }}"
+        path: "{{ box_data_dir }}"
         state: directory
         owner: "{{ human_user }}"
-        group: "{{ human_user }}"
-        mode: '0777' # 0777 ensures ansible-bot can write to it seamlessly
-      loop:
-        - Documents
-        - Photos
-        - Applications
+        group: octopus-home
+        mode: '2775'
 
-    ## 2. Bind Mounter Script Setup (Requires Sudo) ##
-    - name: Install Fish shell (if not present)
-      become: yes
-      package:
-        name: fish
-        state: present
-
-    - name: Create the Fish bind mounter script
-      become: yes
-      copy:
-        dest: /usr/local/bin/octopus-bind-mounts.fish
-        owner: root
-        group: root
-        mode: '0755'
-        content: |
-          #!/usr/bin/env fish
-          # Octopus Linux Bind Mounter
-
-          # 1. Mount /data partitions to /home/human
-          sudo mount --bind /data/Documents /home/human/Documents
-          sudo mount --bind /data/Code /home/human/Code
-          sudo mount --bind /data/Photos /home/human/Photos
-
-          # 2. Mount public human folders to shared box-data
-          sudo mount --bind /home/human/Documents/Public /home/box-data/Documents
-          sudo mount --bind /home/human/Photos/Public /home/box-data/Photos
-          sudo mount --bind /home/human/Applications /home/box-data/Applications
-          
-          echo "Octopus bind mounts successfully applied."
-
-    ## 3. Distrobox Creation (Runs as ansible-bot) ##
-    - name: Check if personal-fedora Distrobox exists
-      command: distrobox list
-      register: distrobox_list
+    ## 2. Distrobox Creation (Runs as ansible-bot) ##
+    - name: Get list of existing Distroboxes
+      command: distrobox list --no-color
+      register: distrobox_list_raw
       changed_when: false
 
-    - name: Create personal-fedora (FOSS & Shared)
-      command: >
-        distrobox create --name personal-fedora 
-        --image registry.fedoraproject.org/fedora-toolbox:latest 
-        --home {{ human_home }} 
-        --volume {{ box_data_dir }}:/box-data 
-        -Y
-      when: "'personal-fedora' not in distrobox_list.stdout"
+    - name: Parse Distrobox names
+      set_fact:
+        existing_boxes: "{{ distrobox_list_raw.stdout_lines | map('regex_replace', '^(\\S+)\\s+.*$', '\\1') | list }}"
 
-    - name: Create gaming-debian (Proprietary & Isolated)
+    - name: Create 'main' Distrobox (Fedora / Firefox)
       command: >
-        distrobox create --name gaming-debian 
-        --image debian:latest 
-        --home {{ box_data_dir }} 
+        distrobox create --name main
+        --image registry.fedoraproject.org/fedora-toolbox:latest
+        --home /home/human
+        --volume {{ box_data_dir }}:/box-data
         -Y
-      when: "'gaming-debian' not in distrobox_list.stdout"
+      when: "'main' not in existing_boxes"
 
-    ## 4. Software Installation Inside gaming-debian (Runs as ansible-bot) ##
-    - name: Enable 32-bit architecture in gaming-debian for Steam/WINE
-      command: distrobox enter gaming-debian -- sudo dpkg --add-architecture i386
-      register: dpkg_arch
+    - name: Create 'gaming' Distrobox (Debian / ZZZ)
+      command: >
+        distrobox create --name gaming
+        --image debian:latest
+        --home {{ box_data_dir }}
+        -Y
+      when: "'gaming' not in existing_boxes"
+
+    ## 3. Gaming Dependencies (Runs as ansible-bot) ##
+    - name: Enable 32-bit architecture in gaming box
+      command: distrobox enter gaming -- sudo dpkg --add-architecture i386
       changed_when: false
 
-    - name: Install Steam, WINE, and dependencies in gaming-debian
+    - name: Install Wine and graphical libraries in gaming box
       command: >
-        distrobox enter gaming-debian -- sudo apt-get update && 
-        sudo apt-get install -y wine wine32 wine64 libwine libwine:i386 fonts-wine steam-installer curl tar software-properties-common
+        distrobox enter gaming -- sudo apt-get update &&
+        sudo apt-get install -y wine wine32 wine64 libwine libwine:i386 fonts-wine curl tar
 
-    - name: Download and install Proton-GE in gaming-debian
+    - name: Download GE-Proton into gaming box
       shell: |
-        distrobox enter gaming-debian -- bash -c '
-          mkdir -p {{ box_data_dir }}/.steam/root/compatibilitytools.d/
-          # Fetches latest GE-Proton release dynamically
-          LATEST_RELEASE=$(curl -s https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest | grep "browser_download_url.*tar.gz" | cut -d : -f 2,3 | tr -d \")
-          curl -sL $LATEST_RELEASE | tar -xz -C {{ box_data_dir }}/.steam/root/compatibilitytools.d/
+        distrobox enter gaming -- bash -c '
+          mkdir -p ~/.steam/root/compatibilitytools.d/
+          LATEST_URL=$(curl -s https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest | grep "browser_download_url.*tar.gz" | cut -d : -f 2,3 | tr -d \")
+          curl -sL $LATEST_URL | tar -xz -C ~/.steam/root/compatibilitytools.d/
         '
       args:
-        creates: "{{ box_data_dir }}/.steam/root/compatibilitytools.d/GE-Proton*"
+        creates: "/home/box-data/.steam/root/compatibilitytools.d/GE-Proton*"
 
-    ## 5. Force Wayland Environment Configurations (Runs as ansible-bot) ##
-    - name: Create Wayland wrappers for Steam and Wine in box-data
-      copy:
-        dest: "{{ box_data_dir }}/.bashrc_wayland"
-        mode: '0644'
-        content: |
-          # Octopus Linux: Force Wayland in gaming-debian
-          export WAYLAND_DISPLAY=wayland-1
-          export SDL_VIDEODRIVER=wayland
-          export WINEWAYLAND=1
-          export XDG_SESSION_TYPE=wayland
-          # Unset X11 Display variable to prevent fallback
-          unset DISPLAY 
-          
-          alias steam="steam -pipewire-dmabuf"
-
-    - name: Source Wayland wrapper in gaming-debian bashrc
-      lineinfile:
-        path: "{{ box_data_dir }}/.bashrc"
-        line: "source ~/.bashrc_wayland"
-        create: yes
+    ## 4. Import Auto-Wine Setup Logic ##
+    - name: Run automated Wine installer and prefix configuration
+      ansible.builtin.import_tasks: wine_setup.yml
