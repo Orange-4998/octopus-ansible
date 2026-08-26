@@ -1,0 +1,57 @@
+---
+- name: Octopus Linux - Non-Octopus Wine Setup Launcher
+  hosts: localhost
+  connection: local
+
+  vars:
+    box_data_dir: /home/box-data
+
+  tasks:
+    ## 1. Ensure Target Directories & Distrobox Exist ##
+    - name: Ensure box-data directory exists
+      become: yes
+      file:
+        path: "{{ box_data_dir }}"
+        state: directory
+        mode: '2775'
+
+    - name: Get list of existing Distroboxes
+      command: distrobox list --no-color
+      register: distrobox_list_raw
+      changed_when: false
+
+    - name: Parse Distrobox names
+      set_fact:
+        existing_boxes: "{{ distrobox_list_raw.stdout_lines | map('regex_replace', '^(\\S+)\\s+.*$', '\\1') | list }}"
+
+    - name: Create 'gaming' Distrobox container
+      command: >
+        distrobox create --name gaming
+        --image debian:latest
+        --home {{ box_data_dir }}
+        -Y
+      when: "'gaming' not in existing_boxes"
+
+    ## 2. Base Container Setup & GE-Proton ##
+    - name: Enable 32-bit architecture inside gaming box
+      command: distrobox enter gaming -- sudo dpkg --add-architecture i386
+      changed_when: false
+
+    - name: Install Wine and required system libraries inside gaming box
+      command: >
+        distrobox enter gaming -- sudo apt-get update &&
+        sudo apt-get install -y wine wine32 wine64 libwine libwine:i386 fonts-wine curl tar
+
+    - name: Download GE-Proton into gaming box compatibility folder
+      shell: |
+        distrobox enter gaming -- bash -c '
+          mkdir -p ~/.steam/root/compatibilitytools.d/
+          LATEST_URL=$(curl -s https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest | grep "browser_download_url.*tar.gz" | cut -d : -f 2,3 | tr -d \")
+          curl -sL $LATEST_URL | tar -xz -C ~/.steam/root/compatibilitytools.d/
+        '
+      args:
+        creates: "{{ box_data_dir }}/.steam/root/compatibilitytools.d/GE-Proton*"
+
+    ## 3. Include Task File ##
+    - name: Include Wine prefix setup and installer logic
+      ansible.builtin.include_tasks: wine-setup.yml
