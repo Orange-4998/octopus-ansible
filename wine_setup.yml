@@ -7,6 +7,8 @@
         installer: "HoYoPlay_Setup.exe"
         installer_args: "/S"
         installed_exe: "drive_c/Program Files/HoYoPlay/HoYoPlay.exe"
+        display_name: "HoYoPlay"
+        comment: "HoYoPlay Launcher (Zenless Zone Zero)"
 
 - name: Ensure Wine directories exist
   file:
@@ -16,6 +18,8 @@
   loop:
     - /home/box-data/winstallers
     - /home/box-data/wine-prefixes
+    - /home/box-data/bin
+    - "{{ ansible_env.HOME }}/.local/share/applications"
 
 - name: Run Windows installers inside gaming box using GE-Proton
   shell: >
@@ -32,4 +36,35 @@
     '
   args:
     creates: "/home/box-data/wine-prefixes/{{ item.name }}/pfx/{{ item.installed_exe }}"
+  loop: "{{ apps }}"
+
+- name: Create launcher script for applications
+  copy:
+    dest: "/home/box-data/bin/launch-{{ item.name | lower }}.sh"
+    mode: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      distrobox enter gaming -- bash -c '
+        PROTON_DIR="$(ls -1d ~/.steam/root/compatibilitytools.d/GE-Proton* | tail -n 1)"
+        export STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.steam/root"
+        export STEAM_COMPAT_DATA_PATH="/home/box-data/wine-prefixes/{{ item.name }}"
+
+        "$PROTON_DIR/proton" run "$STEAM_COMPAT_DATA_PATH/pfx/{{ item.installed_exe }}"
+      '
+  loop: "{{ apps }}"
+
+- name: Create desktop shortcut files for applications
+  copy:
+    dest: "{{ ansible_env.HOME }}/.local/share/applications/{{ item.name | lower }}.desktop"
+    mode: '0644'
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name={{ item.display_name | default(item.name) }}
+      Comment={{ item.comment | default(item.name) }}
+      Exec=/home/box-data/bin/launch-{{ item.name | lower }}.sh
+      Terminal=false
+      Categories=Game;
   loop: "{{ apps }}"
