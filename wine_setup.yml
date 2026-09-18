@@ -17,26 +17,19 @@
     - /home/box-data/winstallers
     - /home/box-data/wine-prefixes
 
-- name: Initialize Wine prefixes inside gaming box
-  command: >
-    distrobox enter gaming --
-    env WINEPREFIX="/home/box-data/wine-prefixes/{{ item.name }}"
-    wineboot -u
-  args:
-    creates: "/home/box-data/wine-prefixes/{{ item.name }}/user.reg"
-  loop: "{{ apps }}"
-
 - name: Run Windows installers inside gaming box using GE-Proton
   shell: >
     distrobox enter gaming -- bash -c '
-      export WINEPREFIX="/home/box-data/wine-prefixes/{{ item.name }}";
-      
-      # Dynamically pick the installed GE-Proton binary
-      RUNNER="$(ls -1d ~/.steam/root/compatibilitytools.d/GE-Proton* | tail -n 1)/files/bin/wine"
-      
-      # Execute installer
-      "$RUNNER" "/home/box-data/winstallers/{{ item.installer }}" {{ item.installer_args | default("") }}
+      # Locate newest GE-Proton root directory
+      PROTON_DIR="$(ls -1d ~/.steam/root/compatibilitytools.d/GE-Proton* | tail -n 1)"
+
+      # Set Steam compatibility paths so Proton manages the prefix environment properly
+      export STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.steam/root"
+      export STEAM_COMPAT_DATA_PATH="/home/box-data/wine-prefixes/{{ item.name }}"
+
+      # Execute installer using Proton wrapper
+      "$PROTON_DIR/proton" run "/home/box-data/winstallers/{{ item.installer }}" {{ item.installer_args | default("") }}
     '
   args:
-    creates: "/home/box-data/wine-prefixes/{{ item.name }}/{{ item.installed_exe }}"
+    creates: "/home/box-data/wine-prefixes/{{ item.name }}/pfx/{{ item.installed_exe }}"
   loop: "{{ apps }}"
