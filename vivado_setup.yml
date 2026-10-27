@@ -1,0 +1,103 @@
+---
+# vivado_setup.yml - Standalone installer for AMD Vivado 2022.2 inside ece385-vivado
+- name: Install AMD Vivado 2022.2 inside Distrobox
+  hosts: localhost
+  connection: local
+
+  vars:
+    ansible_bot_user: ansible-bot
+    # The home directory of the user running the playbook where the downloaded file lives
+    installer_search_path: "{{ lookup('env', 'HOME') }}"
+    container_name: ece385-vivado
+
+  tasks:
+    ## 1. Locate the Vivado Installer Archive ##
+    - name: Find Vivado 2022.2 tar.gz installer archive in home directory
+      ansible.builtin.find:
+        paths: "{{ installer_search_path }}"
+        patterns: "Xilinx_Unified_2022.2*.tar.gz,Xilinx_Unified*.tar.gz"
+        recurse: false
+      register: found_installers
+
+    - name: Ensure at least one Vivado installer archive was found
+      ansible.builtin.assert:
+        that:
+          - found_installers.matched > 0
+        fail_msg: "No Vivado .tar.gz archive (e.g., Xilinx_Unified_2022.2_1014_8888.tar.gz) found in {{ installer_search_path }}!"
+        success_msg: "Found installer archive: {{ found_installers.files[0].path }}"
+
+    - name: Set installer archive path fact
+      ansible.builtin.set_fact:
+        vivado_tar_path: "{{ found_installers.files[0].path }}"
+        vivado_tar_filename: "{{ found_installers.files[0].path | basename }}"
+
+    ## 2. System Prereqs & Extract inside Container ##
+    - name: Install Ubuntu system prerequisites for Vivado & Cable Drivers
+      ansible.builtin.command: >
+        distrobox enter {{ container_name }} -- sudo apt-get update &&
+        distrobox enter {{ container_name }} -- sudo apt-get install -y
+        build-essential
+        libtinfo5
+        libncurses5
+        libgstrtspserver-1.0-0
+        libx11-6
+        libx11-xcb1
+        libext2fs2
+        libglib2.0-0
+        python3
+        python3-pip
+        git
+        locales
+        fxload
+        libusb-0.1-4
+
+    - name: Ensure locale is set to en_US.UTF-8 (Required by Vivado)
+      ansible.builtin.command: >
+        distrobox enter {{ container_name }} -- bash -c "sudo locale-gen en_US.UTF-8 && sudo update-locale LANG=en_US.UTF-8"
+      changed_when: false
+
+    - name: Create extraction workspace inside container home
+      ansible.builtin.command: >
+        distrobox enter {{ container_name }} -- mkdir -p ~/vivado_installer
+
+    - name: Extract Vivado installer tarball (this may take a few minutes)
+      ansible.builtin.command: >
+        distrobox enter {{ container_name }} -- tar -xzf {{ vivado_tar_path }} -C ~/vivado_installer --strip-components=1
+
+    ## 3. Generate Silent Batch Install Config ##
+    - name: Generate Vivado 2022.2 silent installer config (with Spartan 7)
+      ansible.builtin.shell: |
+        distrobox enter {{ container_name }} -- bash -c '
+          cat << "EOF" > ~/vivado_installer/install_config.txt
+        Edition=Vivado ML Standard
+        Destination=/tools/Xilinx
+        Modules=Spartan-7:1,Artix-7:1,Zynq-7000:1,Vitis:1
+        InstallMode=Batch
+        EOF
+        '
+
+    ## 4. Run Batch Installation ##
+    - name: Execute Vivado Batch Installation into /tools/Xilinx (65GB+ required)
+      ansible.builtin.command: >
+        distrobox enter {{ container_name }} -- sudo ~/vivado_installer/xsetup
+        --batch Install
+        --config ~/vivado_installer/install_config.txt
+        --agree XilinxEULA,3rdPartyEULA
+
+    ## 5. Install Digilent/Xilinx Board Cable Drivers ##
+    - name: Install USB Cable Drivers for FPGA flashing
+      ansible.builtin.command: >
+        distrobox enter {{ container_name }} -- bash -c "cd /tools/Xilinx/Vivado/2022.2/data/xicom/cable_drivers/lin64/install_script/install_drivers && sudo ./install_drivers"
+
+    ## 6. Cleanup & Environment Setup ##
+    - name: Add Vivado sourcing to user bashrc inside container
+      ansible.builtin.shell: |
+        distrobox enter {{ container_name }} -- bash -c '
+          if ! grep -q "source /tools/Xilinx/Vivado/2022.2/settings64.sh" ~/.bashrc; then
+            echo "source /tools/Xilinx/Vivado/2022.2/settings64.sh" >> ~/.bashrc
+          fi
+        '
+
+    - name: Clean up temporary extraction directory
+      ansible.builtin.command: >
+        distrobox enter {{ container_name }} -- rm -rf ~/vivado_installer
