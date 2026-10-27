@@ -10,11 +10,22 @@
 
   tasks:
     ## 1. Shared Storage & Home Setup ##
-    - name: Ensure box-data and distrobox home root directories exist
+    - name: Ensure shared box-data directory exists
+      ansible.builtin.file:
+        path: "{{ box_data_dir }}"
+        state: directory
+        # DO NOT set owner, group, or mode here. 
+        # Leaving them off prevents Ansible from running forbidden chown/chmod calls on host mounts.
+
+    - name: Ensure distrobox home subdirectories exist under ansible-bot
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
         mode: '2775'
+      loop:
+        - "{{ bot_home_dir }}/main-home"
+        - "{{ bot_home_dir }}/gaming-home"
+        - "{{ bot_home_dir }}/vivado-home"
 
     ## 2. Distrobox Verification & Parsing ##
     - name: Get list of existing Distroboxes
