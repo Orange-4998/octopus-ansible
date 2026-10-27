@@ -14,14 +14,7 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
-        owner: "{{ ansible_bot_user }}"
-        group: "{{ ansible_bot_user }}"
-        mode: '0775'
-      loop:
-        - "{{ box_data_dir }}"
-        - "{{ bot_home_dir }}/main-home"
-        - "{{ bot_home_dir }}/gaming-home"
-        - "{{ bot_home_dir }}/vivado-home"
+        mode: '2775'
 
     ## 2. Distrobox Verification & Parsing ##
     - name: Get list of existing Distroboxes
